@@ -1,8 +1,13 @@
 {
   "name": "dsh-workflow-builder",
-  "version": "0.1.0",
-  "engines": { "node": ">=22.19.0" },
-  "repository": { "type": "git", "url": "https://github.com/31-ryougishiki/dsh-workflow.git" },
+  "version": "0.2.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/31-ryougishiki/dsh-workflow.git"
+  },
   "description": "DSH 流程编排：自定义步骤、复用配置、保存流程并交给当前会话执行。",
   "type": "module",
   "main": "lib/index.js",

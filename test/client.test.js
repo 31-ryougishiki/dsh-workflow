@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdir, mkdtemp } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { LibraryStore } from '../lib/store.js'
 import { createRequire } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { JSDOM } from 'jsdom'
@@ -19,15 +21,17 @@ test('真实 client bundle：编辑、模板替换与复制、排序、保存重
   const { Simulate } = await import('react-dom/test-utils')
   const { act } = React
   const require = createRequire(import.meta.url)
-  let library = { version: 1, revision: 'initial', recovered: false, templates: [], workflows: [] }
+  const tmp = resolve('artifacts/tests')
+  await mkdir(tmp, { recursive: true })
+  const store = new LibraryStore(join(await mkdtemp(join(tmp, 'ui-')), 'library.json'))
+  let library = await store.read()
   globalThis.fetch = async (_url, options) => {
     if (options.method === 'POST') {
       const body = JSON.parse(options.body)
       assert.equal(body.revision, library.revision)
-      const field = body.action.endsWith('template') ? 'templates' : 'workflows'
-      library = { ...library, revision: crypto.randomUUID(), [field]: [...library[field].filter(item => item.id !== body.item.id), structuredClone(body.item)] }
-    }
-    return new Response(JSON.stringify(library))
+      library = await store.change(body)
+    } else library = await store.read()
+    return new Response(JSON.stringify({ ...library, stepPresets: true }))
   }
   let plugin
   runInNewContext(await readFile(new URL('../lib/client.js', import.meta.url), 'utf8'), {
@@ -56,7 +60,11 @@ test('真实 client bundle：编辑、模板替换与复制、排序、保存重
     const node = buttons(text)[index]
     assert.ok(node, 'button ' + text)
     assert.equal(node.disabled, false, text + ' enabled')
-    await act(async () => { node.click() })
+    await act(async () => {
+      node.click()
+      await store.tail
+      await new Promise(resolve => setImmediate(resolve))
+    })
   }
   async function fill(label, value) {
     const node = labelled(label)
@@ -70,10 +78,18 @@ test('真实 client bundle：编辑、模板替换与复制、排序、保存重
     await fill('配置内容 / 执行说明 1', 'SSH 别名 demo-server；目录 /work/demo')
     await fill('配置内容 / 执行说明 2', '示例模型；FP16；并行数 2')
     await fill('配置内容 / 执行说明 3', '运行性能基准，输出报告')
-    await click('存为新配置')
+    await fill('预设名称 1', '服务器 A')
+    await click('另存为新预设')
     assert.equal(library.templates.length, 1)
-    await click('＋ 空白步骤')
-    await fill('步骤 4 使用已保存配置', library.templates[0].id)
+    await fill('配置内容 / 执行说明 1', 'SSH 服务器 B')
+    await fill('预设名称 1', '服务器 B')
+    await click('另存为新预设')
+    const choices = index => [...labelled('步骤 ' + index + ' 的预设').options].map(option => option.text)
+    assert.deepEqual(choices(1), ['手动填写', '服务器 A', '服务器 B'])
+    assert.deepEqual(choices(2), ['手动填写'])
+    await fill('步骤 1 的预设', library.templates[0].id)
+    await click('＋ 环境信息')
+    await fill('步骤 4 的预设', library.templates[0].id)
     assert.equal(labelled('配置内容 / 执行说明 4').value, library.templates[0].instructions)
     await fill('配置内容 / 执行说明 4', '修改后的配置副本')
     assert.equal(library.templates[0].instructions, 'SSH 别名 demo-server；目录 /work/demo')
@@ -100,6 +116,13 @@ test('真实 client bundle：编辑、模板替换与复制、排序、保存重
     await click('流程编排')
     await click('服务器任务')
     assert.equal(labelled('配置内容 / 执行说明 2').value, '示例模型；FP16；并行数 2')
+    assert.deepEqual(choices(1), ['手动填写', '服务器 A', '服务器 B'])
+    assert.equal(labelled('步骤 1 的预设').value, library.templates[0].id)
+    await fill('步骤 1 的预设', library.templates[1].id)
+    assert.equal(labelled('步骤 1 名称').value, '环境信息')
+    await click('交给 DSH 执行')
+    assert.match(prompts[1][0][0].text, /SSH 服务器 B/)
+    assert.doesNotMatch(prompts[1][0][0].text, /demo-server/)
     await act(async () => reopened.unmount())
   } finally {
     lifetime.abort()

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, unlink } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { LibraryStore } from '../lib/store.js'
 import { apply, createHandler, LIBRARY_PATH } from '../lib/index.js'
-import { compileWorkflow, copyStep, starterFlow } from '../lib/model.js'
+import { compileWorkflow, copyStep, starterFlow, groupOf } from '../lib/model.js'
 import { submitWorkflow } from '../lib/submit.js'
 
 const root = resolve('artifacts/tests')
@@ -52,6 +52,38 @@ test('配置与流程保存、重启读取、修改和删除；流程副本独�
   assert.equal(value.workflows[0].steps[0].instructions, config().instructions)
   value = await reopened.change({ action: 'delete-workflow', revision: value.revision, id: 'flow' })
   assert.equal(value.workflows.length, 0)
+})
+
+test('旧库按原模板关联或同名步骤归组，删除首个旧模板后仍能找到其余预设', async () => {
+  const repository = await store()
+  const first = { ...config('old-a'), title: '自定义环境' }
+  const second = { ...first, id: 'old-b', instructions: 'other server' }
+  const snapshot = { ...first, id: 'instance', title: '流程内已改名', templateId: first.id, instructions: 'modified locally' }
+  const legacy = { version: 1, revision: 'old', templates: [first, second], workflows: [{ ...flow(), steps: [snapshot] }] }
+  await writeFile(repository.path, JSON.stringify(legacy))
+  const current = await repository.read()
+  assert.equal(groupOf(snapshot, current.templates), groupOf(second, current.templates))
+  await repository.change({ action: 'delete-template', id: first.id, revision: current.revision })
+  const saved = await repository.read()
+  assert.equal(saved.templates[0].groupId, saved.workflows[0].steps[0].groupId)
+  assert.equal(saved.workflows[0].steps[0].instructions, 'modified locally')
+})
+
+test('自定义同名步骤可保存同名预设，组内重名及跨组覆盖被拒绝，空步骤可先保存', async () => {
+  const repository = await store()
+  let current = await repository.read()
+  for (const groupId of ['custom-a', 'custom-b']) {
+    current = await repository.change({ action: 'save-preset', revision: current.revision,
+      item: { ...config('preset-' + groupId), title: '自定义', groupId, presetName: '默认' } })
+  }
+  for (const [id, message] of [['preset-custom-b', /其他步骤/], ['new-id', /同名/]]) {
+    await assert.rejects(repository.change({ action: 'save-preset', revision: current.revision,
+      item: { ...current.templates[0], id } }), message)
+  }
+  current = await repository.change({ action: 'save-workflow', revision: current.revision,
+    item: { ...flow(), steps: [{ ...config(), instructions: '', groupId: 'custom-b' }] } })
+  assert.equal(current.workflows[0].steps[0].groupId, 'custom-b')
+  assert.throws(() => compileWorkflow(current.workflows[0]))
 })
 
 test('并发保存同一版本只允许一次成功，失败不覆盖已保存内容', async () => {

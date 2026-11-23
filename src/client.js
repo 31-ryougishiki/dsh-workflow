@@ -1,12 +1,12 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { compileWorkflow, copyStep, starterFlow, step, workflow, MAX_STEPS } from '../lib/model.js'
+import { compileWorkflow, groupOf, starterFlow, preset, workflow, MAX_STEPS } from '../lib/model.js'
 import { submitWorkflow } from '../lib/submit.js'
 import { css } from './style.js'
 
 export const inject = ['slots', 'sessions']
 const uid = () => crypto.randomUUID()
-const blankStep = () => ({ id: uid(), title: '', instructions: '', inputs: '', output: '', completion: '' })
+const blankStep = () => ({ id: uid(), groupId: uid(), title: '', instructions: '', inputs: '', output: '', completion: '' })
 const clone = value => JSON.parse(JSON.stringify(value))
 const hints = {
   环境信息: '填写 SSH 主机别名、工作目录、环境激活命令、GPU / CUDA、数据路径等。凭据写引用，不填明文密码。',
@@ -41,9 +41,9 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
   const [saved, setSaved] = useState(null)
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState('先填写环境、模型和任务，也可以从左侧配置库复用。')
+  const [notice, setNotice] = useState('展开步骤，选择预设或手动填写。')
   const [failed, setFailed] = useState(false)
-  const [selectedTemplate, setSelectedTemplate] = useState('')
+  const [presetNames, setPresetNames] = useState({})
   const [preview, setPreview] = useState('')
   const dialog = useRef(null)
   const operation = useRef(null)
@@ -87,8 +87,12 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
   async function refresh(signal) {
     const value = await api(null, signal)
     signal.throwIfAborted()
+    if (!value.stepPresets) {
+      setSaved(null)
+      throw new Error('请重启 DSH 并刷新页面，以加载支持步骤预设的插件版本。')
+    }
     setSaved(value)
-    setNotice(value.recovered ? '主文件不可读，已从上一份备份恢复。当前草稿保留。' : '配置库已载入；编辑步骤不会更改原模板。')
+    setNotice(value.recovered ? '主文件不可读，已从上一份备份恢复。当前草稿保留。' : '配置库已载入。')
   }
 
   function edit(next) {
@@ -99,7 +103,8 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
 
   function replaceDraft(next) {
     if (dirty && !window.confirm('当前流程有未保存修改，确定替换草稿？')) return
-    setFlow(clone(next))
+    setPresetNames({})
+    setFlow(clone({ ...next, steps: next.steps.map(row => ({ ...row, groupId: groupOf(row, templates) })) }))
     setDirty(false)
     setPreview('')
   }
@@ -122,7 +127,7 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
 
   function saveFlow(asCopy) {
     run(async signal => {
-      const next = workflow({ ...flow, id: asCopy ? uid() : flow.id })
+      const next = workflow({ ...flow, id: asCopy ? uid() : flow.id }, true)
       await change({ action: 'save-workflow', item: next }, signal)
       setFlow(next)
       setDirty(false)
@@ -130,15 +135,20 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
     })
   }
 
-  function saveTemplate(index, overwrite) {
+  const templates = saved?.templates || []
+  const groups = new Map(templates.map(row => [groupOf(row, templates), row.title]))
+  function savePreset(index, overwrite) {
     run(async signal => {
       const source = flow.steps[index]
-      if (overwrite && !window.confirm('确认用当前内容更新已保存模板？已有流程中的副本不会改变。')) return
-      const template = step({ ...source, id: overwrite ? source.templateId : uid() })
-      delete template.templateId
-      await change({ action: 'save-template', item: template }, signal)
-      updateStep(index, { templateId: template.id })
-      setNotice(overwrite ? '模板已更新，其他流程中的副本保持原内容。' : '步骤已保存为可复用配置。')
+      const selected = templates.find(row => row.id === source.templateId)
+      const name = presetNames[source.id] ?? (selected?.presetName || selected?.title || '')
+      if (!name.trim()) throw new Error('请先填写预设名称，例如“服务器 A”')
+      if (overwrite && !window.confirm('更新所选预设“' + (selected.presetName || selected.title) + '”？')) return
+      const item = preset({ ...source, groupId: groupOf(source, templates), id: overwrite ? selected.id : uid(), presetName: name })
+      await change({ action: 'save-preset', item }, signal)
+      updateStep(index, { groupId: item.groupId, templateId: item.id })
+      setPresetNames(names => ({ ...names, [source.id]: undefined }))
+      setNotice('已保存「' + source.title + '」的预设「' + item.presetName + '」。')
     })
   }
 
@@ -169,12 +179,11 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
       button('×', () => deleteSaved('workflow', item), { disabled: busy, title: '删除流程 ' + item.title, 'aria-label': '删除流程 ' + item.title })
     )),
     !saved?.workflows.length && h('p', { className: 'dwf-empty' }, '保存整套流程后，下次可以直接打开、调整、执行。'),
-    h('h3', null, '步骤配置库'),
-    ...(saved?.templates || []).map(item => h('div', { key: item.id, className: 'dwf-item' },
-      button('＋ ' + item.title, () => append(copyStep(item, uid())), { disabled: busy, title: '复制到流程末尾，可继续修改' }),
-      button('×', () => deleteSaved('template', item), { disabled: busy, title: '删除模板 ' + item.title, 'aria-label': '删除模板 ' + item.title })
+    h('h3', null, '可复用步骤'),
+    ...Array.from(groups, ([groupId, title]) => h('div', { key: groupId, className: 'dwf-item' },
+      button('＋ ' + title, () => append({ ...blankStep(), groupId, title }), { disabled: busy, title: '添加步骤，再选择其中的预设' })
     )),
-    !saved?.templates.length && h('p', { className: 'dwf-empty' }, '将常用服务器、模型参数、任务说明分别保存，再按需组合。'),
+    !groups.size && h('p', { className: 'dwf-empty' }, '保存预设后，可在这里复用它所属的步骤。'),
     button('刷新配置库', () => run(refresh), { disabled: busy })
   )
 
@@ -182,44 +191,50 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
     field('流程名称', flow.title, title => edit({ ...flow, title }), { single: true }),
     field('总体目标（可选）', flow.goal, goal => edit({ ...flow, goal }), { rows: 2, placeholder: '本次在服务器上要完成什么？' }),
     h('div', { className: 'dwf-row dwf-toolbar' },
-      h('select', { 'aria-label': '已保存步骤配置', value: selectedTemplate, onChange: event => setSelectedTemplate(event.target.value) },
-        h('option', { value: '' }, '选择已保存配置…'),
-        ...(saved?.templates || []).map(item => h('option', { key: item.id, value: item.id }, item.title))),
-      button('添加配置副本', () => {
-        const template = saved?.templates.find(item => item.id === selectedTemplate)
-        if (template) append(copyStep(template, uid()))
-      }, { disabled: busy || !saved?.templates.some(item => item.id === selectedTemplate) }),
       button('＋ 空白步骤', () => append(blankStep()), { disabled: busy })
     ),
-    ...flow.steps.map((item, index) => h('section', { className: 'dwf-step', key: item.id },
-      h('div', { className: 'dwf-stephead' },
-        h('strong', null, String(index + 1).padStart(2, '0')),
-        h('input', { 'aria-label': '步骤 ' + (index + 1) + ' 名称', value: item.title, maxLength: 120, placeholder: '步骤名称', onChange: event => updateStep(index, { title: event.target.value }) }),
-        button('↑', () => move(index, -1), { disabled: busy || index === 0, 'aria-label': '上移步骤 ' + (index + 1) }),
-        button('↓', () => move(index, 1), { disabled: busy || index === flow.steps.length - 1, 'aria-label': '下移步骤 ' + (index + 1) }),
-        button('复制', () => append({ ...item, id: uid() }), { disabled: busy }),
-        button('删除', () => edit({ ...flow, steps: flow.steps.filter((_, i) => i !== index) }), { disabled: busy, className: 'danger', 'aria-label': '删除步骤 ' + (index + 1) })),
-      item.templateId && h('p', { className: 'dwf-template-note' }, '来自已保存配置的副本 · 可自由修改'),
-      h('select', {
-        'aria-label': '步骤 ' + (index + 1) + ' 使用已保存配置', value: '', style: { marginBottom: 12 },
-        onChange: event => {
-          const template = saved?.templates.find(row => row.id === event.target.value)
-          if (!template) return
-          if (item.instructions && !window.confirm('用已保存配置替换此步骤内容？其他步骤不变。')) return
-          updateStep(index, copyStep(template, item.id))
-        }
-      }, h('option', { value: '' }, '手动填写，或选择已保存配置…'),
-      ...(saved?.templates || []).map(template => h('option', { key: template.id, value: template.id }, template.title))),
-      field('配置内容 / 执行说明 ' + (index + 1), item.instructions, instructions => updateStep(index, { instructions }), { rows: 4, placeholder: hints[item.title] || '填写此步骤的配置或要求…' }),
-      h('details', null, h('summary', null, '补充输入、产出和完成条件（可选）'),
-        field('输入 / 参考资料 ' + (index + 1), item.inputs, inputs => updateStep(index, { inputs })),
-        h('div', { className: 'dwf-grid' },
-          field('预期产出 ' + (index + 1), item.output, output => updateStep(index, { output })),
-          field('完成条件 ' + (index + 1), item.completion, completion => updateStep(index, { completion })))),
-      h('div', { className: 'dwf-row' },
-        button('存为新配置', () => saveTemplate(index, false), { disabled: busy || !saved }),
-        item.templateId && saved?.templates.some(template => template.id === item.templateId) && button('更新原配置', () => saveTemplate(index, true), { disabled: busy }))
-    )),
+    ...flow.steps.map((item, index) => {
+      const groupId = groupOf(item, templates)
+      const choices = templates.filter(row => groupOf(row, templates) === groupId)
+      const selected = choices.find(row => row.id === item.templateId)
+      const label = row => row.presetName || row.title
+      return h('details', { className: 'dwf-step', key: item.id, open: true },
+        h('summary', null, (item.title || '新步骤') + ' · ' + (selected ? label(selected) : '手动填写') + '（' + choices.length + ' 个预设）'),
+        h('div', { className: 'dwf-stephead' },
+          h('strong', null, String(index + 1).padStart(2, '0')),
+          h('input', { 'aria-label': '步骤 ' + (index + 1) + ' 名称', value: item.title, maxLength: 120, placeholder: '步骤名称', onChange: event => updateStep(index, { title: event.target.value }) }),
+          button('↑', () => move(index, -1), { disabled: busy || index === 0, 'aria-label': '上移步骤 ' + (index + 1) }),
+          button('↓', () => move(index, 1), { disabled: busy || index === flow.steps.length - 1, 'aria-label': '下移步骤 ' + (index + 1) }),
+          button('复制', () => append({ ...item, id: uid() }), { disabled: busy }),
+          button('删除', () => edit({ ...flow, steps: flow.steps.filter((_, i) => i !== index) }), { disabled: busy, className: 'danger', 'aria-label': '删除步骤 ' + (index + 1) })),
+        h('label', null, '此步骤的预设', h('select', {
+          'aria-label': '步骤 ' + (index + 1) + ' 的预设', value: selected?.id || '',
+          onChange: event => {
+            const choice = choices.find(row => row.id === event.target.value)
+            const fields = ['instructions', 'inputs', 'output', 'completion']
+            const modified = fields.some(key => item[key] !== (selected?.[key] || ''))
+            if (choice && modified && !window.confirm('切换预设会替换当前步骤填写的内容，继续吗？')) return
+            const patch = { groupId, templateId: choice?.id }
+            if (choice) {
+              for (const key of fields) patch[key] = choice[key]
+            }
+            updateStep(index, patch)
+            setPresetNames(names => ({ ...names, [item.id]: undefined }))
+          }
+        }, h('option', { value: '' }, '手动填写'), ...choices.map(row => h('option', { key: row.id, value: row.id }, label(row))))),
+        field('配置内容 / 执行说明 ' + (index + 1), item.instructions, instructions => updateStep(index, { instructions }), { rows: 4, placeholder: hints[item.title] || '填写此步骤的配置或要求…' }),
+        h('details', null, h('summary', null, '补充输入、产出和完成条件（可选）'),
+          field('输入 / 参考资料 ' + (index + 1), item.inputs, inputs => updateStep(index, { inputs })),
+          h('div', { className: 'dwf-grid' },
+            field('预期产出 ' + (index + 1), item.output, output => updateStep(index, { output })),
+            field('完成条件 ' + (index + 1), item.completion, completion => updateStep(index, { completion })))),
+        field('预设名称 ' + (index + 1), presetNames[item.id] ?? (selected ? label(selected) : ''),
+          name => setPresetNames(names => ({ ...names, [item.id]: name })), { single: true, placeholder: '例如：服务器 A' }),
+        h('div', { className: 'dwf-row' },
+          button('另存为新预设', () => savePreset(index, false), { disabled: busy || !saved }),
+          selected && button('更新所选预设', () => savePreset(index, true), { disabled: busy }),
+          selected && button('删除所选预设', () => deleteSaved('template', { ...selected, title: label(selected) }), { disabled: busy })))
+    }),
     !flow.steps.length && h('p', { className: 'dwf-empty' }, '添加一个步骤，或从配置库选择。'),
     preview && h('section', null, h('h3', null, '完整 Prompt 预览'), h('pre', { className: 'dwf-preview' }, preview))
   )
