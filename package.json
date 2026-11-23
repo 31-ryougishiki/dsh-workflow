@@ -1,0 +1,51 @@
+{
+  "name": "dsh-workflow-builder",
+  "version": "0.1.0",
+  "engines": { "node": ">=22.19.0" },
+  "repository": { "type": "git", "url": "https://github.com/31-ryougishiki/dsh-workflow.git" },
+  "description": "DSH 流程编排：自定义步骤、复用配置、保存流程并交给当前会话执行。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "node --test test/*.test.js",
+    "preview": "node scripts/preview.js",
+    "install:local": "node scripts/install.js",
+    "prepack": "npm run build"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.2-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-api-session-controller"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "jsdom": "^29.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
