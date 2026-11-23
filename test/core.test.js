@@ -15,13 +15,17 @@ async function store() {
   return new LibraryStore(join(await mkdtemp(join(root, '配置 test-')), 'library.json'))
 }
 
-test('三段配置全部进入一个 prompt，顺序、参数和完成条件保留', () => {
+test('每步只发送标题和正文，旧版补充内容不进入 prompt', () => {
   const source = flow()
   source.steps[2].completion = '准确率达到 90%'
+  source.steps[0].inputs = '旧资料'
+  source.steps[1].output = '旧产出'
   const text = compileWorkflow(source)
-  assert.ok(text.indexOf('环境信息') < text.indexOf('模型配置'))
-  assert.ok(text.indexOf('## 配置步骤 2') < text.indexOf('## 配置步骤 3'))
-  assert.ok(text.includes('准确率达到 90%'))
+  assert.equal(text.slice(text.indexOf('## 配置步骤 1')), [
+    '## 配置步骤 1：环境信息', source.steps[0].instructions, '',
+    '## 配置步骤 2：模型配置', source.steps[1].instructions, '',
+    '## 配置步骤 3：任务配置', source.steps[2].instructions
+  ].join('\n'))
   assert.ok(text.includes('不自动变更 DSH'))
   assert.equal(starterFlow(() => 'new').steps.length, 3)
 })
