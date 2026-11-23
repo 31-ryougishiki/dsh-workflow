@@ -1,4 +1,5 @@
 export const css = `
+.dwf .dwf-step-summary{display:flex;align-items:center;gap:8px}.dwf-step-summary span{flex:1;min-width:0;overflow-wrap:anywhere}.dwf-step-summary::before{content:'▸'}.dwf-step[open]>.dwf-step-summary::before{content:'▾'}
 .dwf-launch {border:1px solid var(--dsw-alias-border-l2,#d5dbd7);border-radius:16px;padding:4px 12px;background:transparent;color:inherit;font:inherit;cursor:pointer}
 .dwf {box-sizing:border-box;width:min(1160px,96vw);height:min(850px,92vh);padding:0;border:1px solid #cdd9d3;border-radius:18px;background:#f5f7f5;color:#24372e;box-shadow:0 24px 90px #11251a40;font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}
 .dwf[open]{display:flex;flex-direction:column;overflow:hidden}.dwf::backdrop {background:#0e201b80;backdrop-filter:blur(3px)}

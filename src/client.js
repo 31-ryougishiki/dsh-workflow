@@ -166,6 +166,15 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
     edit({ ...flow, steps })
   }
 
+  function deleteGroup(groupId, title) {
+    const count = templates.filter(row => groupOf(row, templates) === groupId).length
+    if (!window.confirm('删除可复用步骤「' + title + '」及其 ' + count + ' 个预设？已加入流程的步骤内容会保留。')) return
+    run(async signal => {
+      await change({ action: 'delete-group', id: groupId }, signal)
+      setNotice('已从可复用步骤中删除「' + title + '」。')
+    })
+  }
+
   function showPreview() {
     try { setPreview(compileWorkflow(flow)); setFailed(false); setNotice('这是即将交给 DSH 的完整内容。') }
     catch (error) { setFailed(true); setNotice(error.message) }
@@ -181,7 +190,8 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
     !saved?.workflows.length && h('p', { className: 'dwf-empty' }, '保存整套流程后，下次可以直接打开、调整、执行。'),
     h('h3', null, '可复用步骤'),
     ...Array.from(groups, ([groupId, title]) => h('div', { key: groupId, className: 'dwf-item' },
-      button('＋ ' + title, () => append({ ...blankStep(), groupId, title }), { disabled: busy, title: '添加步骤，再选择其中的预设' })
+      button('＋ ' + title, () => append({ ...blankStep(), groupId, title }), { disabled: busy, title: '添加步骤，再选择其中的预设' }),
+      button('删除', () => deleteGroup(groupId, title), { disabled: busy, className: 'danger', 'aria-label': '删除可复用步骤 ' + title })
     )),
     !groups.size && h('p', { className: 'dwf-empty' }, '保存预设后，可在这里复用它所属的步骤。'),
     button('刷新配置库', () => run(refresh), { disabled: busy })
@@ -199,14 +209,19 @@ export function WorkflowBuilder({ sessionId, sessions, lifetime }) {
       const selected = choices.find(row => row.id === item.templateId)
       const label = row => row.presetName || row.title
       return h('details', { className: 'dwf-step', key: item.id, open: true },
-        h('summary', null, (item.title || '新步骤') + ' · ' + (selected ? label(selected) : '手动填写') + '（' + choices.length + ' 个预设）'),
+        h('summary', { className: 'dwf-step-summary' },
+          h('span', null, (item.title || '新步骤') + ' · ' + (selected ? label(selected) : '手动填写') + '（' + choices.length + ' 个预设）'),
+          button('删除步骤', event => {
+            event.preventDefault()
+            event.stopPropagation()
+            edit({ ...flow, steps: flow.steps.filter(row => row.id !== item.id) })
+          }, { disabled: busy, className: 'danger', 'aria-label': '删除步骤 ' + (index + 1) })),
         h('div', { className: 'dwf-stephead' },
           h('strong', null, String(index + 1).padStart(2, '0')),
           h('input', { 'aria-label': '步骤 ' + (index + 1) + ' 名称', value: item.title, maxLength: 120, placeholder: '步骤名称', onChange: event => updateStep(index, { title: event.target.value }) }),
           button('↑', () => move(index, -1), { disabled: busy || index === 0, 'aria-label': '上移步骤 ' + (index + 1) }),
           button('↓', () => move(index, 1), { disabled: busy || index === flow.steps.length - 1, 'aria-label': '下移步骤 ' + (index + 1) }),
-          button('复制', () => append({ ...item, id: uid() }), { disabled: busy }),
-          button('删除', () => edit({ ...flow, steps: flow.steps.filter((_, i) => i !== index) }), { disabled: busy, className: 'danger', 'aria-label': '删除步骤 ' + (index + 1) })),
+          button('复制', () => append({ ...item, id: uid() }), { disabled: busy })),
         h('label', null, '此步骤的预设', h('select', {
           'aria-label': '步骤 ' + (index + 1) + ' 的预设', value: selected?.id || '',
           onChange: event => {

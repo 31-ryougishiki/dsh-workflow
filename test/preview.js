@@ -14,7 +14,7 @@ window.fetch = async (_url, options) => {
     const body = JSON.parse(options.body)
     const field = body.action.endsWith('workflow') ? 'workflows' : 'templates'
     const itemId = body.item?.id || body.id
-    library[field] = library[field].filter(item => item.id !== itemId)
+    library[field] = library[field].filter(item => body.action === 'delete-group' ? item.groupId !== itemId : item.id !== itemId)
     if (body.item) library[field].push(body.item)
     library.revision = crypto.randomUUID()
   }

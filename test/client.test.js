@@ -95,7 +95,10 @@ test('真实 client bundle：编辑、模板替换与复制、排序、保存重
     assert.equal(library.templates[0].instructions, 'SSH 别名 demo-server；目录 /work/demo')
     await act(async () => labelled('上移步骤 4').click())
     assert.equal(labelled('配置内容 / 执行说明 3').value, '修改后的配置副本')
-    await act(async () => labelled('删除步骤 3').click())
+    const remove = labelled('删除步骤 3')
+    remove.closest('details').open = false
+    assert.ok(remove.closest('summary'), '折叠时仍可删除')
+    await act(async () => remove.click())
     await click('保存流程')
     assert.equal(library.workflows.length, 1)
     assert.equal(library.workflows[0].steps.length, 3)
@@ -123,6 +126,23 @@ test('真实 client bundle：编辑、模板替换与复制、排序、保存重
     await click('交给 DSH 执行')
     assert.match(prompts[1][0][0].text, /SSH 服务器 B/)
     assert.doesNotMatch(prompts[1][0][0].text, /demo-server/)
+    await fill('预设名称 2', '推理')
+    await click('另存为新预设', 1)
+    await act(async () => {
+      labelled('删除可复用步骤 环境信息').click()
+      await store.tail
+      await new Promise(resolve => setImmediate(resolve))
+    })
+    assert.equal(labelled('删除可复用步骤 环境信息'), null)
+    assert.deepEqual(choices(1), ['手动填写'])
+    assert.deepEqual(choices(2), ['手动填写', '推理'])
+    assert.equal(labelled('配置内容 / 执行说明 1').value, 'SSH 服务器 B')
+    assert.equal((await store.read()).workflows[0].steps[0].instructions, 'SSH 别名 demo-server；目录 /work/demo')
+    for (let index = 3; index > 0; index--) {
+      await act(async () => labelled('删除步骤 ' + index).click())
+    }
+    await click('保存流程')
+    assert.equal((await store.read()).workflows[0].steps.length, 0)
     await act(async () => reopened.unmount())
   } finally {
     lifetime.abort()
